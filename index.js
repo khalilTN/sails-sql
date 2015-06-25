@@ -41,25 +41,37 @@ module.exports = (function () {
                 case 'oracle':
                     this.dialect = new oracleDialect();
             }
-            console.log('connection',connection);
             if (!connection.identity)
                 return cb("Errors.IdentityMissing");
             if (connections[connection.identity])
                 return cb("Errors.IdentityDuplicate");
             var client = Knex({client: connection.dbType, connection: connection,
                 pool: {
-                    min: 0,
-                    max: 10
+                    min: 1,
+                    max: 1
                 }, debug: LOG_QUERIES
             });
-            // Store the connection
-            connections[connection.identity] = {
+            var queries = [];
+            queries[0] = "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
+            queries[1] = "ALTER SESSION SET NLS_DATE_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
+            queries[2] = "ALTER SESSION SET NLS_COMP=LINGUISTIC";
+            queries[3] = "ALTER SESSION SET NLS_SORT=BINARY_CI";
+            asynk.each(queries, function(query, next){
+              client.raw(query).then(function(resp){
+                next();
+              }).catch(function(e){
+                next(e);
+              });
+            }).args(asynk.item, asynk.callback).serie(function(err){
+              if(err) return cb(err);
+              // Store the connection
+              connections[connection.identity] = {
                 config: connection,
                 collections: collections,
                 client: client
-            };
-
-            return cb();
+              };
+              return cb();
+            }, [null]);
         },
         commit:function(connectionName,cb){
             var connectionObject = connections[connectionName];
@@ -80,7 +92,7 @@ module.exports = (function () {
                 return cb(util.format('Unknown collection `%s` in connection `%s`', collectionName, connectionName));
             }
             var client = connectionObject.client;
-            var tableName = collectionName;
+            var tableName = this.dialect.formatIdentifier(collectionName);
             // TODO logic here
             client.schema.createTable(tableName, function (table) {
                 _.keys(definition).forEach(function (attrName) {
@@ -142,22 +154,23 @@ module.exports = (function () {
             /************* surpassing the binary types probleme *******************/
             console.log("dbType: ",connectionObject.config.dbType);
             if(connectionObject.config.dbType === 'oracle'){
-            criteria.select = _.filter(_.keys(collection.definition),function(attr){
-                var type = _.isObject(collection.definition[attr])?collection.definition[attr].type:collection.definition[attr];
-                if(['binary','array','json'].indexOf(type.toLowerCase())<0)
-                    return attr;
-            });
-            console.log(criteria.select);
+            var list = criteria.select || _.keys(collection.definition);
+              criteria.select = _.filter(list,function(attr){
+                  var type = _.isObject(collection.definition[attr])?collection.definition[attr].type:collection.definition[attr];
+                  if(['binary','array','json'].indexOf(type.toLowerCase())<0)
+                      return attr;
+              });
             }
+            console.log(criteria.select);
             /************* ******************** *******************/
             /* replace attributes names by columnNames */
             SQL.select(client, collectionName, schema, criteria).then(function (result) {
                 cb(null, result);
-            }).catch(function (e) {
+            })/*.catch(function (e) {
                 if (LOG_ERRORS)
                     console.log('#Error :', e);
                 cb(e);
-            });
+            })*/;
         },
         drop: function (connectionName, collectionName, relations, cb, connection) {
             if (typeof relations === 'function') {
@@ -238,9 +251,12 @@ module.exports = (function () {
             var autoInc = null;
             
             _.keys(collection.definition).forEach(function (key) {
-                if (!_.has(collection.definition[key], 'autoIncrement'))
-                    return;
-                autoInc = key;
+                if (_.has(collection.definition[key], 'autoIncrement'))
+                  autoInc = key;
+                
+                if(_insertData[key] && !_.isUndefined(collection.definition[key].type) && collection.definition[key].type === 'binary'){
+                  _insertData[key] =  _insertData[key].toString('hex');
+                }
             });
 
             var insertQuery = client(tableName).insert(_insertData);
@@ -250,7 +266,7 @@ module.exports = (function () {
                 if (autoInc) {
                     autoIncData[autoInc] = result[0];
                 }
-                var values = _.extend({}, _insertData, autoIncData);
+                var values = _.extend({}, data, autoIncData);
                 self.commit(connectionName,function(err){
                     if(!err){
                         cb(null, values);
@@ -319,6 +335,17 @@ module.exports = (function () {
             var criteria = SQL.normalizeCriteria(options, collection.attributes);
             var ids = [];
             var pk = 'id';
+            /************* surpassing the binary types probleme *******************/
+            if(connectionObject.config.dbType === 'oracle'){
+            var select = _.filter(_.keys(collection.definition),function(attr){
+                var type = _.isObject(collection.definition[attr])?collection.definition[attr].type:collection.definition[attr];
+                if(['binary','array','json'].indexOf(type.toLowerCase())<0)
+                    return attr;
+            });
+            console.log('==>',select);
+            criteria.select = select;
+            }
+            /************* ******************** *******************/
             SQL.select(client, collectionName, schema, criteria).then(function (results) {
                 _.keys(collection.definition).forEach(function (key) {
                     if (!_.has(collection.definition[key], 'primaryKey'))
@@ -337,9 +364,11 @@ module.exports = (function () {
                     values[value] = SQL.prepareValue(values[value]);
                 });
                 SQL.update(client, collectionName, criteria, values).then(function () {
-                var resultCriteria;
-                resultCriteria = {where: {}};
+                var resultCriteria = {where: {}};
                 resultCriteria.where[pk] = ids;
+                /****************************/
+                resultCriteria.select = select;
+                /*****************************/
                 SQL.select(client, collectionName, schema, resultCriteria).then(function (updatedRecords) {
                     cb(null, updatedRecords);
                 });
@@ -530,8 +559,3 @@ module.exports = (function () {
     return adapter;
 
 })();
-
-
-
-
-
