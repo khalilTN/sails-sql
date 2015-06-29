@@ -51,27 +51,37 @@ module.exports = (function () {
                     max: 1
                 }, debug: LOG_QUERIES
             });
-            var queries = [];
-            queries[0] = "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
-            queries[1] = "ALTER SESSION SET NLS_DATE_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
-            queries[2] = "ALTER SESSION SET NLS_COMP=LINGUISTIC";
-            queries[3] = "ALTER SESSION SET NLS_SORT=BINARY_CI";
-            asynk.each(queries, function(query, next){
-              client.raw(query).then(function(resp){
-                next();
-              }).catch(function(e){
-                next(e);
-              });
-            }).args(asynk.item, asynk.callback).serie(function(err){
-              if(err) return cb(err);
-              // Store the connection
+            if(connection.dbType === 'oracle'){
+              var queries = [];
+              queries[0] = "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
+              queries[1] = "ALTER SESSION SET NLS_DATE_FORMAT = 'yyyy-mm-dd hh24:mi:ss'";
+              queries[2] = "ALTER SESSION SET NLS_COMP=LINGUISTIC";
+              queries[3] = "ALTER SESSION SET NLS_SORT=BINARY_CI";
+              asynk.each(queries, function(query, next){
+                client.raw(query).then(function(resp){
+                  next();
+                }).catch(function(e){
+                  next(e);
+                });
+              }).args(asynk.item, asynk.callback).serie(function(err){
+                if(err) return cb(err);
+                // Store the connection
+                connections[connection.identity] = {
+                  config: connection,
+                  collections: collections,
+                  client: client
+                };
+                return cb();
+              }, [null]);
+            }
+            else {
               connections[connection.identity] = {
-                config: connection,
-                collections: collections,
-                client: client
-              };
-              return cb();
-            }, [null]);
+                  config: connection,
+                  collections: collections,
+                  client: client
+                };
+                return cb();
+            }
         },
         commit:function(connectionName,cb){
             var connectionObject = connections[connectionName];
@@ -164,15 +174,17 @@ module.exports = (function () {
             console.log(criteria.select);
             /************* ******************** *******************/
             /* replace attributes names by columnNames */
-            SQL.select(client, collectionName, schema, criteria).then(function (result) {
+            var tableName = this.dialect.formatIdentifier(collectionName);
+            SQL.select(client, tableName, schema, criteria).then(function (result) {
                 cb(null, result);
-            })/*.catch(function (e) {
+            }).catch(function (e) {
                 if (LOG_ERRORS)
                     console.log('#Error :', e);
                 cb(e);
-            })*/;
+            });
         },
         drop: function (connectionName, collectionName, relations, cb, connection) {
+            var self = this;
             if (typeof relations === 'function') {
                 cb = relations;
                 relations = [];
@@ -181,7 +193,8 @@ module.exports = (function () {
             var client = connectionObject.client;
 
             function dropTable(item, callback) {
-                client.schema.dropTableIfExists(collectionName).then(function (result) {
+                var tableName = self.dialect.formatIdentifier(collectionName);
+                client.schema.dropTableIfExists(tableName).then(function (result) {
                     callback(null, result);
                 }).catch(function (e) {
                     if (LOG_ERRORS)
@@ -198,6 +211,7 @@ module.exports = (function () {
 
         },
         createEach: function (connectionName, collectionName, valuesList, cb, connection) {
+            var self = this;
             var connectionObject = connections[connectionName];
             var collection = connectionObject.collections[collectionName];
             var client = connectionObject.client;
@@ -208,8 +222,8 @@ module.exports = (function () {
                     data[value] = SQL.prepareValue(data[value]);
                 });
                 var schema = collection.waterline.schema;
-
-                client(collectionName).insert(data).then(function (results) {
+                var tableName = self.dialect.formatIdentifier(collectionName);
+                client(tableName).insert(data).then(function (results) {
                     records.push(results.insertId);
                     cb();
                 }).catch(function (e) {
@@ -240,7 +254,7 @@ module.exports = (function () {
             var self = this;
             var connectionObject = connections[connectionName];
             var collection = connectionObject.collections[collectionName];
-            var tableName = collectionName;
+            var tableName = this.dialect.formatIdentifier(collectionName);
             var client = connectionObject.client;
             //var _insertData = lodash.cloneDeep(data);
             var _insertData = _.clone(data);
@@ -267,14 +281,7 @@ module.exports = (function () {
                     autoIncData[autoInc] = result[0];
                 }
                 var values = _.extend({}, data, autoIncData);
-                self.commit(connectionName,function(err){
-                    if(!err){
-                        cb(null, values);
-                    }
-                    else{
-                        cb(err);
-                    }
-                });
+                cb(null, values);
             }).catch(function (e) {
              if (LOG_ERRORS)
                 console.log('#Error', e);
@@ -283,10 +290,9 @@ module.exports = (function () {
 
         },
         destroy: function (connectionName, collectionName, options, cb, connection) {
-            var self = this;
             var connectionObject = connections[connectionName];
             var collection = connectionObject.collections[collectionName];
-            var tableName = collectionName;
+            var tableName = this.dialect.formatIdentifier(collectionName);
             var client = connectionObject.client;
             var criteria = SQL.normalizeCriteria(options, collection.attributes);
             /************* surpassing the binary types probleme *******************/
@@ -300,7 +306,7 @@ module.exports = (function () {
             }
             /************* ******************** *******************/
             asynk.add(function (callback) {
-                SQL.select(client, collectionName, null, criteria).then(function (result) {
+                SQL.select(client, tableName, null, criteria).then(function (result) {
                     callback(null, result);
                 }).catch(function (e) {
                     if (LOG_ERRORS)
@@ -309,15 +315,8 @@ module.exports = (function () {
                 });
             }).args(asynk.callback).alias('findRecords')
                     .add(function (callback) {
-                        SQL.destroy(client, collectionName, criteria).then(function (result) {
-                            self.commit(connectionName,function(err){
-                                if(!err){
-                                    callback(null,result);
-                                }
-                                else{
-                                    callback(null);
-                                }
-                            });
+                        SQL.destroy(client, tableName, criteria).then(function (result) {
+                          callback(null, result);
                         }).catch(function (e) {
                             if (LOG_ERRORS)
                                 console.log('#Error :', e);
@@ -333,6 +332,7 @@ module.exports = (function () {
             var client = connectionObject.client;
             var schema = collection.waterline.schema;
             var criteria = SQL.normalizeCriteria(options, collection.attributes);
+            var tableName = this.dialect.formatIdentifier(collectionName);
             var ids = [];
             var pk = 'id';
             /************* surpassing the binary types probleme *******************/
@@ -346,7 +346,7 @@ module.exports = (function () {
             criteria.select = select;
             }
             /************* ******************** *******************/
-            SQL.select(client, collectionName, schema, criteria).then(function (results) {
+            SQL.select(client, tableName, schema, criteria).then(function (results) {
                 _.keys(collection.definition).forEach(function (key) {
                     if (!_.has(collection.definition[key], 'primaryKey'))
                         return;
@@ -363,20 +363,20 @@ module.exports = (function () {
                 _.keys(values).forEach(function (value) {
                     values[value] = SQL.prepareValue(values[value]);
                 });
-                SQL.update(client, collectionName, criteria, values).then(function () {
+                SQL.update(client, tableName, criteria, values).then(function () {
                 var resultCriteria = {where: {}};
                 resultCriteria.where[pk] = ids;
                 /****************************/
                 resultCriteria.select = select;
                 /*****************************/
-                SQL.select(client, collectionName, schema, resultCriteria).then(function (updatedRecords) {
+                SQL.select(client, tableName, schema, resultCriteria).then(function (updatedRecords) {
                     cb(null, updatedRecords);
                 });
-            });/*.catch(function (e) {
+            }).catch(function (e) {
                 if (LOG_ERRORS)
                     console.log('#Error :', e);
                 cb(e);
-            })*/;
+            });
 
         });
         },
@@ -405,7 +405,7 @@ module.exports = (function () {
             });
         },
         join: function (connectionName, collectionName, options, cb, connection) {
-
+            var dialect = this.dialect;
             Cursor({
                 instructions: options,
                 nativeJoins: true,
@@ -421,6 +421,14 @@ module.exports = (function () {
                     var buffers = options.buffers;
                     var instructions = options.instructions;
                     var populationsInfos = instructions.instructions;
+                    var mapping = {};
+                    var i = 0;
+                    _.keys(populationsInfos).forEach(function(attr) {
+                      var population = populationsInfos[attr].instructions[0];
+                      mapping["p" + i] = population.parentKey;
+                      population.parentKeyAlias = "p" + i;
+                      i++;
+                    });
                     var connectionObject = connections[connectionName];
                     var client = connectionObject.client;
                     var collection = connectionObject.collections[collectionName];
@@ -430,7 +438,8 @@ module.exports = (function () {
                     var parentPkAttributeName = _getPkAttributeName(connectionName, collectionName, parentPkColumnName);
                     var buffersHandler = new BuffersHandler(connectionObject, buffers, parentPkAttributeName);
                     var queries = {};
-                    SQL.select(client, collectionName, _schema, parentCriteria).then(function (result) {
+                    var tableName = dialect.formatIdentifier(collectionName);
+                    SQL.select(client, tableName, _schema, parentCriteria).then(function (result) {
                         buffersHandler.setParents(result);
                         _.keys(populationsInfos).forEach(function (attributeToPopulate) {
                             var childCriteria;
@@ -444,13 +453,13 @@ module.exports = (function () {
                                 if (!childCriteria.where)
                                     childCriteria.where = {};
                                 childCriteria = SQL.normalizeCriteria(childCriteria, connectionObject.collections[childInfos.child].attributes);
-                                queries[attributeToPopulate] = {schema: schema, collectionName: childInfos.child, criteriasByParent: [], foreignKey: childInfos.childKey, strategy: populationObject.strategy.strategy};
+                                queries[attributeToPopulate] = {schema: schema, collectionName: dialect.formatIdentifier(childInfos.child), criteriasByParent: [], foreignKey: childInfos.childKey, strategy: populationObject.strategy.strategy};
                             }else if(populationObject.strategy.strategy === 3){
                                var schema = connectionObject.collections[populationObject.instructions[1].child].waterline.schema;
                                queries[attributeToPopulate] = {schema : schema,
-                                                               parentCollection : populationObject.instructions[0].parent,
-                                                               childCollection : populationObject.instructions[1].child,
-                                                               jonctionCollection : populationObject.instructions[1].parent,
+                                                               parentCollection : dialect.formatIdentifier(populationObject.instructions[0].parent),
+                                                               childCollection : dialect.formatIdentifier(populationObject.instructions[1].child),
+                                                               jonctionCollection : dialect.formatIdentifier(populationObject.instructions[1].parent),
                                                                criteria : {select : populationObject.instructions[1].select, criteria : populationObject.instructions[1].criteria},
                                                                jonctionParentFK : populationObject.instructions[0].childKey,
                                                                jonctionChildFK : populationObject.instructions[1].parentKey,
@@ -460,7 +469,7 @@ module.exports = (function () {
                                 };
                             }
                             buffers.parents.forEach(function (parent) {
-                                var splitedChildren = SQL.splitStrategyOneChildren(parent);
+                                var splitedChildren = SQL.splitStrategyOneChildren(parent, mapping);
                                 var buffer = buffersHandler.createBuffer(parent, attributeToPopulate, populationObject);
                                 /* if parent has a reference to the child and there is a child result splitted */
                                 if (parent[buffer.keyName] && splitedChildren && splitedChildren[buffer.keyName]) {
@@ -482,7 +491,7 @@ module.exports = (function () {
                         });
                         asynk.each(_.keys(queries), function (toPopulate, nextAttr) {
                                 if(queries[toPopulate].strategy === 2){
-                                SQL.makeUnion(client, queries[toPopulate]).then(function (result) {
+                                  dialect.makeUnion(client, queries[toPopulate]).then(function (result) {
                                     var childRecords = result;
                                     childRecords.forEach(function (childRecord) {
                                         buffersHandler.searchBufferAndAddChild(childRecord, queries[toPopulate].foreignKey, toPopulate);
@@ -490,13 +499,13 @@ module.exports = (function () {
                                     nextAttr();
                                 });
                                 }else{
-                                    SQL.manyToManyUnion(client ,queries[toPopulate]).then(function(result){
+                                  dialect.manyToManyUnion(client ,queries[toPopulate]).then(function(result){
                                         var childRecords = result;
                                         childRecords.forEach(function (childRecord) {
                                             buffersHandler.searchBufferAndAddChild(childRecord, '___'+queries[toPopulate].jonctionParentFK, toPopulate);
                                         });
                                         nextAttr();
-                                    });
+                                  });
                                 }
                         }).args(asynk.item, asynk.callback).serie(function () {
                             next();
