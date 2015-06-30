@@ -83,15 +83,6 @@ module.exports = (function () {
                 return cb();
             }
         },
-        commit:function(connectionName,cb){
-            var connectionObject = connections[connectionName];
-            var client = connectionObject.client;
-            client.raw('commit').then(function(){
-                cb();
-            }).catch(function(e){
-                cb(e);
-            });
-        },
         define: function (connectionName, collectionName, definition, cb, connection) {
 
             // Define a new "table" or "collection" schema in the data store
@@ -268,7 +259,7 @@ module.exports = (function () {
                 if (_.has(collection.definition[key], 'autoIncrement'))
                   autoInc = key;
                 
-                if(_insertData[key] && !_.isUndefined(collection.definition[key].type) && collection.definition[key].type === 'binary'){
+                if(connectionObject.config.dbType === 'oracle' && _insertData[key] && !_.isUndefined(collection.definition[key].type) && collection.definition[key].type === 'binary'){
                   _insertData[key] =  _insertData[key].toString('hex');
                 }
             });
