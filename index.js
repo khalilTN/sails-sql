@@ -396,7 +396,6 @@ module.exports = (function () {
             });
         },
         join: function (connectionName, collectionName, options, cb, connection) {
-            var dialect = this.dialect;
             Cursor({
                 instructions: options,
                 nativeJoins: true,
