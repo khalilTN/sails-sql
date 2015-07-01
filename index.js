@@ -482,7 +482,7 @@ module.exports = (function () {
                         });
                         asynk.each(_.keys(queries), function (toPopulate, nextAttr) {
                                 if(queries[toPopulate].strategy === 2){
-                                  dialect.makeUnion(client, queries[toPopulate]).then(function (result) {
+                                  SQL.makeUnion(client, queries[toPopulate]).then(function (result) {
                                     var childRecords = result;
                                     childRecords.forEach(function (childRecord) {
                                         buffersHandler.searchBufferAndAddChild(childRecord, queries[toPopulate].foreignKey, toPopulate);
@@ -490,7 +490,7 @@ module.exports = (function () {
                                     nextAttr();
                                 });
                                 }else{
-                                  dialect.manyToManyUnion(client ,queries[toPopulate]).then(function(result){
+                                  SQL.manyToManyUnion(client ,queries[toPopulate]).then(function(result){
                                         var childRecords = result;
                                         childRecords.forEach(function (childRecord) {
                                             buffersHandler.searchBufferAndAddChild(childRecord, '___'+queries[toPopulate].jonctionParentFK, toPopulate);
