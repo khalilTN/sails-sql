@@ -396,7 +396,7 @@ module.exports = (function () {
             });
         },
         join: function (connectionName, collectionName, options, cb, connection) {
-
+            var self = this;
             Cursor({
                 instructions: options,
                 nativeJoins: true,
@@ -429,7 +429,7 @@ module.exports = (function () {
                     var parentPkAttributeName = _getPkAttributeName(connectionName, collectionName, parentPkColumnName);
                     var buffersHandler = new BuffersHandler(connectionObject, buffers, parentPkAttributeName);
                     var queries = {};
-                    var tableName = dialect.formatIdentifier(collectionName);
+                    var tableName = self.dialect.formatIdentifier(collectionName);
                     SQL.select(client, tableName, _schema, parentCriteria).then(function (result) {
                         buffersHandler.setParents(result);
                         _.keys(populationsInfos).forEach(function (attributeToPopulate) {
@@ -444,13 +444,13 @@ module.exports = (function () {
                                 if (!childCriteria.where)
                                     childCriteria.where = {};
                                 childCriteria = SQL.normalizeCriteria(childCriteria, connectionObject.collections[childInfos.child].attributes);
-                                queries[attributeToPopulate] = {schema: schema, collectionName: dialect.formatIdentifier(childInfos.child), criteriasByParent: [], foreignKey: childInfos.childKey, strategy: populationObject.strategy.strategy};
+                                queries[attributeToPopulate] = {schema: schema, collectionName: self.dialect.formatIdentifier(childInfos.child), criteriasByParent: [], foreignKey: childInfos.childKey, strategy: populationObject.strategy.strategy};
                             }else if(populationObject.strategy.strategy === 3){
                                var schema = connectionObject.collections[populationObject.instructions[1].child].waterline.schema;
                                queries[attributeToPopulate] = {schema : schema,
-                                                               parentCollection : dialect.formatIdentifier(populationObject.instructions[0].parent),
-                                                               childCollection : dialect.formatIdentifier(populationObject.instructions[1].child),
-                                                               jonctionCollection : dialect.formatIdentifier(populationObject.instructions[1].parent),
+                                                               parentCollection : self.dialect.formatIdentifier(populationObject.instructions[0].parent),
+                                                               childCollection : self.dialect.formatIdentifier(populationObject.instructions[1].child),
+                                                               jonctionCollection : self.dialect.formatIdentifier(populationObject.instructions[1].parent),
                                                                criteria : {select : populationObject.instructions[1].select, criteria : populationObject.instructions[1].criteria},
                                                                jonctionParentFK : populationObject.instructions[0].childKey,
                                                                jonctionChildFK : populationObject.instructions[1].parentKey,
