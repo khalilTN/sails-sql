@@ -166,7 +166,7 @@ module.exports = (function () {
             /************* ******************** *******************/
             /* replace attributes names by columnNames */
             var tableName = this.dialect.formatIdentifier(collectionName);
-            SQL.select(client, tableName, schema, criteria).then(function (result) {
+            SQL.select(client, tableName, criteria).then(function (result) {
                 cb(null, result);
             }).catch(function (e) {
                 if (LOG_ERRORS)
@@ -254,7 +254,7 @@ module.exports = (function () {
                 _insertData[key] = SQL.prepareValue(_insertData[key]);
             });
             var autoInc = null;
-            
+
             _.keys(collection.definition).forEach(function (key) {
                 if (_.has(collection.definition[key], 'autoIncrement'))
                   autoInc = key;
@@ -297,7 +297,7 @@ module.exports = (function () {
             }
             /************* ******************** *******************/
             asynk.add(function (callback) {
-                SQL.select(client, tableName, null, criteria).then(function (result) {
+                SQL.select(client, tableName,  criteria).then(function (result) {
                     callback(null, result);
                 }).catch(function (e) {
                     if (LOG_ERRORS)
@@ -337,7 +337,7 @@ module.exports = (function () {
             criteria.select = select;
             }
             /************* ******************** *******************/
-            SQL.select(client, tableName, schema, criteria).then(function (results) {
+            SQL.select(client, tableName, criteria).then(function (results) {
                 _.keys(collection.definition).forEach(function (key) {
                     if (!_.has(collection.definition[key], 'primaryKey'))
                         return;
@@ -360,7 +360,7 @@ module.exports = (function () {
                 /****************************/
                 resultCriteria.select = select;
                 /*****************************/
-                SQL.select(client, tableName, schema, resultCriteria).then(function (updatedRecords) {
+                SQL.select(client, tableName, resultCriteria).then(function (updatedRecords) {
                     cb(null, updatedRecords);
                 });
             }).catch(function (e) {
@@ -430,7 +430,7 @@ module.exports = (function () {
                     var buffersHandler = new BuffersHandler(connectionObject, buffers, parentPkAttributeName);
                     var queries = {};
                     var tableName = self.dialect.formatIdentifier(collectionName);
-                    SQL.select(client, tableName, _schema, parentCriteria).then(function (result) {
+                    SQL.select(client, tableName, parentCriteria, false, _schema).then(function (result) {
                         buffersHandler.setParents(result);
                         _.keys(populationsInfos).forEach(function (attributeToPopulate) {
                             var childCriteria;
@@ -444,20 +444,25 @@ module.exports = (function () {
                                 if (!childCriteria.where)
                                     childCriteria.where = {};
                                 childCriteria = SQL.normalizeCriteria(childCriteria, connectionObject.collections[childInfos.child].attributes);
-                                queries[attributeToPopulate] = {schema: schema, collectionName: self.dialect.formatIdentifier(childInfos.child), criteriasByParent: [], foreignKey: childInfos.childKey, strategy: populationObject.strategy.strategy};
+                                queries[attributeToPopulate] = {childCollection: self.dialect.formatIdentifier(childInfos.child),
+                                                                parentsIds: [],
+                                                                criteria : childCriteria,
+                                                                foreignKey: childInfos.childKey,
+                                                                childColumns : _.keys(connectionObject.collections[childInfos.child].definition),
+                                                                strategy: populationObject.strategy.strategy
+                                                              };
                             }else if(populationObject.strategy.strategy === 3){
-                               var schema = connectionObject.collections[populationObject.instructions[1].child].waterline.schema;
-                               queries[attributeToPopulate] = {schema : schema,
-                                                               parentCollection : self.dialect.formatIdentifier(populationObject.instructions[0].parent),
-                                                               childCollection : self.dialect.formatIdentifier(populationObject.instructions[1].child),
+                               queries[attributeToPopulate] = {childCollection : self.dialect.formatIdentifier(populationObject.instructions[1].child),
                                                                jonctionCollection : self.dialect.formatIdentifier(populationObject.instructions[1].parent),
-                                                               criteria : {select : populationObject.instructions[1].select, criteria : populationObject.instructions[1].criteria},
+                                                               criteria :  populationObject.instructions[1].criteria,
                                                                jonctionParentFK : populationObject.instructions[0].childKey,
                                                                jonctionChildFK : populationObject.instructions[1].parentKey,
                                                                parentPk : populationObject.instructions[0].parentKey,
                                                                childPK : populationObject.instructions[1].childKey,
-                                                               parentIds : []
-                                };
+                                                               childColumns : _.keys(connectionObject.collections[populationObject.instructions[1].child].definition),
+                                                               parentsIds : [],
+                                                               strategy: populationObject.strategy.strategy
+                                                              };
                             }
                             buffers.parents.forEach(function (parent) {
                                 var splitedChildren = SQL.splitStrategyOneChildren(parent, mapping);
@@ -470,19 +475,14 @@ module.exports = (function () {
                                         buffer = buffersHandler.addChildToBuffer(buffer, splitedChild);
                                 }
                                 buffersHandler.saveBuffer(buffer);
-                                if (populationObject.strategy.strategy === 2) {
-                                    var criteria = _.clone(childCriteria);
-                                    criteria.where = _.clone(childCriteria.where);
-                                    criteria.where[childInfos.childKey] = parent[parentPkAttributeName];
-                                    queries[attributeToPopulate].criteriasByParent.push(criteria);
-                                }else if(populationObject.strategy.strategy === 3){
-                                    queries[attributeToPopulate].parentIds.push(parent[parentPkAttributeName]);
+                                if (populationObject.strategy.strategy === 2 || populationObject.strategy.strategy === 3) {
+                                  queries[attributeToPopulate].parentsIds.push(parent[parentPkAttributeName]);
                                 }
                             });
                         });
                         asynk.each(_.keys(queries), function (toPopulate, nextAttr) {
                                 if(queries[toPopulate].strategy === 2){
-                                  SQL.makeUnion(client, queries[toPopulate]).then(function (result) {
+                                  SQL.fetchOneToManyChildren(client, queries[toPopulate]).then(function (result) {
                                     var childRecords = result;
                                     childRecords.forEach(function (childRecord) {
                                         buffersHandler.searchBufferAndAddChild(childRecord, queries[toPopulate].foreignKey, toPopulate);
@@ -490,7 +490,7 @@ module.exports = (function () {
                                     nextAttr();
                                 });
                                 }else{
-                                  SQL.manyToManyUnion(client ,queries[toPopulate]).then(function(result){
+                                  SQL.fetchManyToManyChildren(client ,queries[toPopulate]).then(function(result){
                                         var childRecords = result;
                                         childRecords.forEach(function (childRecord) {
                                             buffersHandler.searchBufferAndAddChild(childRecord, '___'+queries[toPopulate].jonctionParentFK, toPopulate);
