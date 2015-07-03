@@ -137,42 +137,40 @@ module.exports = (function () {
                 collection.schema = normalizedSchema;
                 cb(null, normalizedSchema);
             }, LOG_QUERIES);
+        },
+        _find: function (connectionName, collectionName, options, cb) {
+          if (options.groupBy || options.sum || options.average || options.min || options.max) {
+            if (!options.sum && !options.average && !options.min && !options.max) {
+              return cb(Errors.InvalidGroupBy);
+            }
+          }
+          return SQL.select(connections[connectionName].client, collectionName, options);
         }
         ,
         find: function (connectionName, collectionName, options, cb) {
-
-            if (options.groupBy || options.sum || options.average || options.min || options.max) {
-                if (!options.sum && !options.average && !options.min && !options.max) {
-                    return cb(Errors.InvalidGroupBy);
-                }
+          var self = this;
+          var params = {
+            connectionObject : connections[connectionName],
+            collectionName : collectionName,
+            options : options
+          };
+          this.dialect.beforeFind(params, connections[connectionName].client, function(err, params, client){
+            if(err){
+              if (LOG_ERRORS)
+                console.log('#Error :', err);
+              return cb(err);
             }
-            var connectionObject = connections[connectionName];
-            var collection = connectionObject.collections[collectionName];
-            var client = connectionObject.client;
-            var schema = collection.waterline.schema;
-            var attributes = collection.attributes;
-            var criteria = SQL.normalizeCriteria(options, attributes);
-            /************* surpassing the binary types probleme *******************/
-            console.log("dbType: ",connectionObject.config.dbType);
-            if(connectionObject.config.dbType === 'oracle'){
-            var list = criteria.select || _.keys(collection.definition);
-              criteria.select = _.filter(list,function(attr){
-                  var type = _.isObject(collection.definition[attr])?collection.definition[attr].type:collection.definition[attr];
-                  if(['binary','array','json'].indexOf(type.toLowerCase())<0)
-                      return attr;
+            var query = self._find(connectionName, params.tableName, params.options, cb);
+            if(query){
+            query.then(function (results) {
+                self.dialect.afterFind(results, params, cb);
+              }).catch(function (e) {
+              if (LOG_ERRORS)
+                console.log('#Error :', e);
+              cb(e);
               });
             }
-            console.log(criteria.select);
-            /************* ******************** *******************/
-            /* replace attributes names by columnNames */
-            var tableName = this.dialect.formatIdentifier(collectionName);
-            SQL.select(client, tableName, criteria).then(function (result) {
-                cb(null, result);
-            }).catch(function (e) {
-                if (LOG_ERRORS)
-                    console.log('#Error :', e);
-                cb(e);
-            });
+          });
         },
         drop: function (connectionName, collectionName, relations, cb, connection) {
             var self = this;
@@ -430,7 +428,7 @@ module.exports = (function () {
                     var buffersHandler = new BuffersHandler(connectionObject, buffers, parentPkAttributeName);
                     var queries = {};
                     var tableName = self.dialect.formatIdentifier(collectionName);
-                    SQL.select(client, tableName, parentCriteria, false, _schema).then(function (result) {
+                    SQL.select(client, tableName, parentCriteria,  _schema).then(function (result) {
                         buffersHandler.setParents(result);
                         _.keys(populationsInfos).forEach(function (attributeToPopulate) {
                             var childCriteria;
